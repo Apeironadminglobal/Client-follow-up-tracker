@@ -57,6 +57,10 @@ td input{padding:6px}
       <h2>Clients (<span id="count">0</span>)</h2>
       <button id="xl" type="button">Export to Excel</button>
     </div>
+    <div class="bar">
+      <span class="note" id="syncStatus" style="margin:0"></span>
+      <span><button id="link" type="button" class="ghost">Connect Excel file</button> <button id="chg" type="button" class="ghost" style="display:none">Change file</button></span>
+    </div>
     <div class="wrap">
       <table>
         <thead><tr><th>Client Name</th><th>Company</th><th>Proposal</th><th>First Follow Up</th><th>2nd Follow Up</th><th>3rd Follow Up</th><th></th></tr></thead>
@@ -101,10 +105,10 @@ td input{padding:6px}
 
   function add(data){
     data.createdAt=Date.now(); data.id="l"+data.createdAt;
-    rows.push(data); lsSave(); render();
+    rows.push(data); lsSave(); render(); sync();
   }
-  function update(r,k,v){ r[k]=v; lsSave(); }
-  function remove(r){ rows=rows.filter(function(x){return x!==r}); lsSave(); render(); }
+  function update(r,k,v){ r[k]=v; lsSave(); sync(); }
+  function remove(r){ rows=rows.filter(function(x){return x!==r}); lsSave(); render(); sync(); }
 
   $("f").addEventListener("submit",function(e){
     e.preventDefault();
@@ -113,9 +117,11 @@ td input{padding:6px}
     add(d); e.target.reset(); e.target.elements.name.focus();
   });
 
-  $("xl").addEventListener("click",function(){
-    if(!rows.length){alert("Add at least one client first.");return}
-    if(typeof XLSX==="undefined"){alert("Excel export could not load. Check your connection and reload.");return}
+  var XLSXMIME="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  var fh=null, supported=("showSaveFilePicker" in window);
+  function setStatus(t){$("syncStatus").textContent=t}
+
+  function buildXlsx(){
     var aoa=[["Client Name","Company","Proposal","First Follow Up","2nd Follow Up","3rd Follow Up"]];
     rows.forEach(function(r){
       aoa.push([r.name,r.company,r.proposal].concat(["f1","f2","f3"].map(function(k){return r[k]?new Date(r[k]+"T00:00:00Z"):""})));
@@ -124,16 +130,64 @@ td input{padding:6px}
     ws["!cols"]=[{wch:24},{wch:28},{wch:34},{wch:18},{wch:18},{wch:18}];
     for(var R=1;R<aoa.length;R++)for(var C=3;C<6;C++){var c=ws[XLSX.utils.encode_cell({r:R,c:C})];if(c&&c.t==="d")c.z="mmm d, yyyy";}
     var wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Client Tracker");
-    var out=XLSX.write(wb,{bookType:"xlsx",type:"array"});
-    var blob=new Blob([out],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+    return XLSX.write(wb,{bookType:"xlsx",type:"array"});
+  }
+
+  $("xl").addEventListener("click",function(){
+    if(!rows.length){alert("Add at least one client first.");return}
+    if(typeof XLSX==="undefined"){alert("Excel export could not load. Check your connection and reload.");return}
+    var blob=new Blob([buildXlsx()],{type:XLSXMIME});
     var link=document.createElement("a");
     link.href=URL.createObjectURL(blob); link.download="Client_Follow_Up_Tracker.xlsx";
     document.body.appendChild(link); link.click(); link.remove();
     setTimeout(function(){URL.revokeObjectURL(link.href)},1000);
   });
 
+  // ---- automatic saving to a chosen Excel file (Chrome / Edge on a computer) ----
+  function idb(mode,fn){return new Promise(function(res,rej){
+    var o=indexedDB.open("client-tracker",1);
+    o.onupgradeneeded=function(){o.result.createObjectStore("h")};
+    o.onerror=function(){rej(o.error)};
+    o.onsuccess=function(){var tx=o.result.transaction("h",mode),rq=fn(tx.objectStore("h"));
+      tx.oncomplete=function(){res(rq&&rq.result)};tx.onerror=function(){rej(tx.error)}};
+  })}
+
+  function sync(){
+    if(!fh||typeof XLSX==="undefined") return Promise.resolve();
+    return fh.queryPermission({mode:"readwrite"}).then(function(p){
+      if(p!=="granted"){setStatus("Click Reconnect to allow saving to "+fh.name);$("link").textContent="Reconnect";return}
+      return fh.createWritable().then(function(w){return w.write(buildXlsx()).then(function(){return w.close()})})
+        .then(function(){$("link").textContent="Sync now";setStatus("Saved to "+fh.name+" at "+new Date().toLocaleTimeString())});
+    }).catch(function(){setStatus("Could not write to "+fh.name+". If it is open in Excel, close it, then add or edit an entry or click Sync now.")});
+  }
+
+  function pick(){
+    var acc={}; acc[XLSXMIME]=[".xlsx"];
+    return window.showSaveFilePicker({suggestedName:"Client_Follow_Up_Tracker.xlsx",types:[{description:"Excel workbook",accept:acc}]}).then(function(h){
+      fh=h; $("chg").style.display="";
+      idb("readwrite",function(st){return st.put(h,"fh")}).catch(function(){});
+      return sync();
+    });
+  }
+
+  $("link").addEventListener("click",function(){
+    if(!supported){alert("Your browser can't save directly to a file. Use Chrome or Edge on a computer, or use Export to Excel.");return}
+    var p=fh?fh.requestPermission({mode:"readwrite"}).then(function(r){if(r==="granted")return sync()}):pick();
+    p.catch(function(e){if(!e||e.name!=="AbortError")setStatus("Could not connect to the file.")});
+  });
+  $("chg").addEventListener("click",function(){pick().catch(function(){})});
+
   rows=lsLoad(); render();
-  $("note").textContent="Saved in this browser. Export to Excel regularly to keep a backup.";
+  $("note").textContent="Saved in this browser. Connect an Excel file to save every change to it automatically.";
+  if(!supported){ setStatus("Direct saving to Excel needs Chrome or Edge on a computer. You can still use Export to Excel."); $("link").style.display="none"; }
+  else idb("readonly",function(st){return st.get("fh")}).then(function(h){
+    if(!h) return;
+    fh=h; $("chg").style.display="";
+    return h.queryPermission({mode:"readwrite"}).then(function(p){
+      if(p==="granted"){$("link").textContent="Sync now";return sync()}
+      $("link").textContent="Reconnect"; setStatus("Click Reconnect to resume saving to "+h.name);
+    });
+  }).catch(function(){});
 })();
 </script>
 </body>
