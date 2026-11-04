@@ -38,7 +38,7 @@ td input{padding:6px}
 <body>
 <main>
   <h1>Client Follow-Up Tracker</h1>
-  <p class="sub">Enter a client below. Entries are saved in this browser, and you can export a copy to Excel anytime.</p>
+  <p class="sub">Enter a client below. Entries are saved in this browser. Connect an Excel file to save every entry to it automatically.</p>
 
   <div class="card">
     <form id="f">
@@ -55,7 +55,6 @@ td input{padding:6px}
   <div class="card">
     <div class="bar">
       <h2>Clients (<span id="count">0</span>)</h2>
-      <button id="xl" type="button">Export to Excel</button>
     </div>
     <div class="bar">
       <span class="note" id="syncStatus" style="margin:0"></span>
@@ -133,62 +132,4 @@ td input{padding:6px}
     return XLSX.write(wb,{bookType:"xlsx",type:"array"});
   }
 
-  $("xl").addEventListener("click",function(){
-    if(!rows.length){alert("Add at least one client first.");return}
-    if(typeof XLSX==="undefined"){alert("Excel export could not load. Check your connection and reload.");return}
-    var blob=new Blob([buildXlsx()],{type:XLSXMIME});
-    var link=document.createElement("a");
-    link.href=URL.createObjectURL(blob); link.download="Client_Follow_Up_Tracker.xlsx";
-    document.body.appendChild(link); link.click(); link.remove();
-    setTimeout(function(){URL.revokeObjectURL(link.href)},1000);
-  });
-
-  // ---- automatic saving to a chosen Excel file (Chrome / Edge on a computer) ----
-  function idb(mode,fn){return new Promise(function(res,rej){
-    var o=indexedDB.open("client-tracker",1);
-    o.onupgradeneeded=function(){o.result.createObjectStore("h")};
-    o.onerror=function(){rej(o.error)};
-    o.onsuccess=function(){var tx=o.result.transaction("h",mode),rq=fn(tx.objectStore("h"));
-      tx.oncomplete=function(){res(rq&&rq.result)};tx.onerror=function(){rej(tx.error)}};
-  })}
-
-  function sync(){
-    if(!fh||typeof XLSX==="undefined") return Promise.resolve();
-    return fh.queryPermission({mode:"readwrite"}).then(function(p){
-      if(p!=="granted"){setStatus("Click Reconnect to allow saving to "+fh.name);$("link").textContent="Reconnect";return}
-      return fh.createWritable().then(function(w){return w.write(buildXlsx()).then(function(){return w.close()})})
-        .then(function(){$("link").textContent="Sync now";setStatus("Saved to "+fh.name+" at "+new Date().toLocaleTimeString())});
-    }).catch(function(){setStatus("Could not write to "+fh.name+". If it is open in Excel, close it, then add or edit an entry or click Sync now.")});
-  }
-
-  function pick(){
-    var acc={}; acc[XLSXMIME]=[".xlsx"];
-    return window.showSaveFilePicker({suggestedName:"Client_Follow_Up_Tracker.xlsx",types:[{description:"Excel workbook",accept:acc}]}).then(function(h){
-      fh=h; $("chg").style.display="";
-      idb("readwrite",function(st){return st.put(h,"fh")}).catch(function(){});
-      return sync();
-    });
-  }
-
-  $("link").addEventListener("click",function(){
-    if(!supported){alert("Your browser can't save directly to a file. Use Chrome or Edge on a computer, or use Export to Excel.");return}
-    var p=fh?fh.requestPermission({mode:"readwrite"}).then(function(r){if(r==="granted")return sync()}):pick();
-    p.catch(function(e){if(!e||e.name!=="AbortError")setStatus("Could not connect to the file.")});
-  });
-  $("chg").addEventListener("click",function(){pick().catch(function(){})});
-
-  rows=lsLoad(); render();
-  $("note").textContent="Saved in this browser. Connect an Excel file to save every change to it automatically.";
-  if(!supported){ setStatus("Direct saving to Excel needs Chrome or Edge on a computer. You can still use Export to Excel."); $("link").style.display="none"; }
-  else idb("readonly",function(st){return st.get("fh")}).then(function(h){
-    if(!h) return;
-    fh=h; $("chg").style.display="";
-    return h.queryPermission({mode:"readwrite"}).then(function(p){
-      if(p==="granted"){$("link").textContent="Sync now";return sync()}
-      $("link").textContent="Reconnect"; setStatus("Click Reconnect to resume saving to "+h.name);
-    });
-  }).catch(function(){});
-})();
-</script>
-</body>
-</html>
+  // ----
